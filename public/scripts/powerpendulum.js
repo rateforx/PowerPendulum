@@ -1,42 +1,43 @@
 "use strict";
+
+let scene; // three scene
+let world; // cannon world
+let renderer;
+let camera; // perspective camera
+let light;
+let ambient;
+let controls; // orbit controls
+let backgroundColor = 0;
+
+let dt = 1 / 60;
+
+let pendulumBase; // static physical base of the pendulum
+let pendulum1Physics, pendulum1, pendulum1Mass = Math.random() * 10, pendulum1Color = Math.random() * 0xffffff; // first pendulum physics and graphics objects, mass
+let pendulum2Physics, pendulum2, pendulum2Mass = Math.random() * 10, pendulum2Color = Math.random() * 0xffffff; // second pendulum physics and graphics objects, mass
+
+let distanceConstraint1, distanceConstraint2; // physics constraints acting as the pendulum "arms"
+let arms; // graphical line object representing arms
+let armsColor = 0x333333;
+
+let trail; // Three line object representing the second pendulum trail following its movement
+let trailColor = 0; // initial hue value of the hsl palette, updated in each trail update step
+let trailLength = 5000; // when the grail gets to its maximum length the vertex array gets shifted out
+let trailDash = 3;
+let trailGap = 1;
+
+let cameraFollowMovement = false;
+
+let pendulum1VelocityArrowHelper, pendulum2VelocityArrowHelper; // velocity arrow helper
+
+const DAMPING = .01; // pendulum linear damping value
+const DEBUG = false; // show helpers
+const CONTROLS = true; // enable orbit controls
+const ARROWS = true; // arrows attached to pendulum showing its velocity
+
+let gui; // dat gui instance
+let stats; // fps counter
+
 $( function () {
-
-    let scene; // three scene
-    let world; // cannon world
-    let renderer;
-    let camera; // perspective camera
-    let light;
-    let ambient;
-    let controls; // orbit controls
-    let backgroundColor = 0;
-
-    let dt = 1 / 60;
-
-    let pendulumBase; // static physical base of the pendulum
-    let pendulum1Physics, pendulum1, pendulum1Mass = Math.random() * 10, pendulum1Color = Math.random() * 0xffffff; // first pendulum physics and graphics objects, mass
-    let pendulum2Physics, pendulum2, pendulum2Mass = Math.random() * 10, pendulum2Color = Math.random() * 0xffffff; // second pendulum physics and graphics objects, mass
-
-    let distanceConstraint1, distanceConstraint2; // physics constraints acting as the pendulum "arms"
-    let arms; // graphical line object representing arms
-    let armsColor = 0x333333;
-
-    let trail; // Three line object representing the second pendulum trail following its movement
-    let trailColor = 0; // initial hue value of the hsl palette, updated in each trail update step
-    let trailLength = 5000; // when the grail gets to its maximum length the vertex array gets shifted out
-    let trailDash = 3;
-    let trailGap = 1;
-
-    let cameraFollowMovement = true;
-
-    let pendulum1VelocityArrowHelper, pendulum2VelocityArrowHelper; // velocity arrow helper
-
-    const DAMPING = .01; // pendulum linear damping value
-    const DEBUG = false; // show helpers
-    const CONTROLS = true; // enable orbit controls
-    const ARROWS = true; // arrows attached to pendulum showing its velocity
-
-    let gui; // dat gui instance
-    let stats; // fps counter
 
     function initCannon() {
         world = new CANNON.World();
@@ -101,6 +102,8 @@ $( function () {
         camera = new THREE.PerspectiveCamera(
             50, // fov
             window.innerWidth / window.innerHeight, // aspect ratio
+            .0001, // near
+            2000 // infinite far
         );
         camera.position.set( 0, -15, -50 );
         camera.lookAt( scene.position );
@@ -113,13 +116,13 @@ $( function () {
         scene.add( ambient );
 
         pendulum1 = new THREE.Mesh(
-            new THREE.SphereGeometry( pendulum1Mass / 2, 16, 16 ),
+            new THREE.IcosahedronGeometry( pendulum1Mass / 2, 2 ),
             new THREE.MeshPhongMaterial( {
                 color: pendulum1Color,
             } ),
         );
         pendulum2 = new THREE.Mesh(
-            new THREE.SphereGeometry( pendulum2Mass / 2, 16, 16 ),
+            new THREE.IcosahedronGeometry( pendulum2Mass / 2, 2 ),
             new THREE.MeshPhongMaterial( {
                 color: pendulum2Color,
             } ),
@@ -127,6 +130,7 @@ $( function () {
 
         trail = new THREE.Line( new THREE.Geometry, new THREE.LineBasicMaterial( {
             color: new THREE.Color( `hsl( ${trailColor}, 100%, 50% )` ),
+            // frustrumCulled: false,
         } ) );
 
         let armsGeometry = new THREE.Geometry();
@@ -165,9 +169,13 @@ $( function () {
         }
         if ( CONTROLS ) {
             controls = new THREE.OrbitControls( camera, renderer.domElement );
+            controls.autoRotate = false;
+            controls.autoRotateSpeed = -1; // default: 2 => 30s rotation
             controls.enableDamping = true;
+            // controls.dampingFactor = .5;
             controls.enableKeys = false;
             controls.enablePan = false;
+            controls.rotateSpeed = .25;
         }
     }
 
@@ -193,13 +201,13 @@ $( function () {
         let pendulum1MassController = gui.add( settings, 'pendulum1Mass', .01, 10 );
         pendulum1MassController.onFinishChange( value => {
             pendulum1Physics.mass = value;
-            pendulum1.scale( value / 2, value / 2, value / 2 );
+            pendulum1.scale.set( value / 2, value / 2, value / 2 );
         } );
 
         let pendulum2MassController = gui.add( settings, 'pendulum2Mass', .01, 10 );
         pendulum2MassController.onFinishChange( value => {
             pendulum2Physics.mass = value;
-            pendulum2.scale( value / 2, value / 2, value / 2 );
+            pendulum2.scale.set( value / 2, value / 2, value / 2 );
         } );
 
         let pendulum1ColorController = gui.addColor( settings, 'pendulum1Color' );
@@ -246,7 +254,10 @@ $( function () {
             trail.material.gapSize = value;
         } );
 
-        gui.add( settings, 'cameraFollowMovement' );
+        let cameraFollowMovementController = gui.add( settings, 'cameraFollowMovement' );
+        cameraFollowMovementController.onChange( value => {
+            cameraFollowMovement = value;
+        } );
     }
 
     function initStats() {
