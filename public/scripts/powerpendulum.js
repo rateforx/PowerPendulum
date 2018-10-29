@@ -5,22 +5,38 @@ $( function () {
     let world; // cannon world
     let renderer;
     let camera; // perspective camera
+    let light;
+    let ambient;
     let controls; // orbit controls
-
-    let pb; // static physical base of the pendulum
-    let pp1, p1; // first pendulum physics and graphics objects
-    let pp2, p2; // second pendulum physics and graphics objects
-    let dc1, dc2; // physics constraints acting as the pendulum "arms"
-    let arms; // graphical line object representing arms
-    let trail; //
-    let vah1, vah2; // velocity arrow helper
+    let backgroundColor = 0;
 
     let dt = 1 / 60;
 
+    let pendulumBase; // static physical base of the pendulum
+    let pendulum1Physics, pendulum1, pendulum1Mass = Math.random() * 10, pendulum1Color = Math.random() * 0xffffff; // first pendulum physics and graphics objects, mass
+    let pendulum2Physics, pendulum2, pendulum2Mass = Math.random() * 10, pendulum2Color = Math.random() * 0xffffff; // second pendulum physics and graphics objects, mass
+
+    let distanceConstraint1, distanceConstraint2; // physics constraints acting as the pendulum "arms"
+    let arms; // graphical line object representing arms
+    let armsColor = 0x333333;
+
+    let trail; // Three line object representing the second pendulum trail following its movement
+    let trailColor = 0; // initial hue value of the hsl palette, updated in each trail update step
+    let trailLength = 5000; // when the grail gets to its maximum length the vertex array gets shifted out
+    let trailDash = 3;
+    let trailGap = 1;
+
+    let cameraFollowMovement = true;
+
+    let pendulum1VelocityArrowHelper, pendulum2VelocityArrowHelper; // velocity arrow helper
+
     const DAMPING = .01; // pendulum linear damping value
-    const DEBUG = true; // show helpers
+    const DEBUG = false; // show helpers
     const CONTROLS = true; // enable orbit controls
     const ARROWS = true; // arrows attached to pendulum showing its velocity
+
+    let gui; // dat gui instance
+    let stats; // fps counter
 
     function initCannon() {
         world = new CANNON.World();
@@ -29,44 +45,52 @@ $( function () {
 
         let sphereShape = new CANNON.Sphere( 1 );
 
-        pb = new CANNON.Body( {
+        pendulumBase = new CANNON.Body( {
             mass: 0,
             shape: sphereShape,
             position: new CANNON.Vec3( 0, 0, 0 ),
         } );
-        pb.name = 'Pendulum Base';
 
-        pp1 = new CANNON.Body( {
-            mass: 1,
+        pendulum1Physics = new CANNON.Body( {
+            mass: pendulum1Mass,
             shape: sphereShape,
-            position: new CANNON.Vec3( -10, 0, 0 ),
+            position: new CANNON.Vec3(
+                Math.random() * 20 - 10,
+                Math.random() * 20 - 10,
+                Math.random() * 20 - 10,
+            ),
             fixedRotation: true,
             linearDamping: DAMPING,
         } );
-        pp1.name = 'PendulumA';
 
-        pp2 = new CANNON.Body( {
-            mass: .2,
+        pendulum2Physics = new CANNON.Body( {
+            mass: pendulum2Mass,
             shape: sphereShape,
-            position: new CANNON.Vec3( -10, 0, -10 ),
+            position: new CANNON.Vec3(
+                Math.random() * 40 - 20,
+                Math.random() * 40 - 20,
+                Math.random() * 40 - 20,
+            ),
             fixedRotation: true,
             linearDamping: DAMPING,
         } );
-        pp2.name = 'PendulumB';
 
-        dc1 = new CANNON.DistanceConstraint( pb, pp1 );
-        dc2 = new CANNON.DistanceConstraint( pp1, pp2 );
+        distanceConstraint1 = new CANNON.DistanceConstraint( pendulumBase, pendulum1Physics );
+        distanceConstraint2 = new CANNON.DistanceConstraint( pendulum1Physics, pendulum2Physics );
 
-        world.addBody( pb );
-        world.addBody( pp1 );
-        world.addBody( pp2 );
+        world.addBody( pendulumBase );
+        world.addBody( pendulum1Physics );
+        world.addBody( pendulum2Physics );
 
-        world.addConstraint( dc1 );
-        world.addConstraint( dc2 );
+        world.addConstraint( distanceConstraint1 );
+        world.addConstraint( distanceConstraint2 );
     }
 
     function initThree() {
+
         scene = new THREE.Scene();
+        scene.background = new THREE.Color( backgroundColor );
+
         renderer = new THREE.WebGLRenderer( {
             antialias: true,
         } );
@@ -75,51 +99,65 @@ $( function () {
         $( '#viewport' ).append( renderer.domElement );
 
         camera = new THREE.PerspectiveCamera(
-            35, // fov
-            window.innerWidth / window.innerHeight, // ratio
-            1, // near
-            1000 // far
+            50, // fov
+            window.innerWidth / window.innerHeight, // aspect ratio
         );
-        camera.position.set( 0, -10, -50 );
+        camera.position.set( 0, -15, -50 );
         camera.lookAt( scene.position );
 
-        let sphereGeometry = new THREE.SphereGeometry(
-            1, // radius
-            14, 14, // h w segments
+        light = new THREE.PointLight( 0xffffff, .5, 0, 1 );
+        light.position.set( 50, 0, -50 );
+        scene.add( light );
+
+        ambient = new THREE.AmbientLight( 0xffffff, .5 );
+        scene.add( ambient );
+
+        pendulum1 = new THREE.Mesh(
+            new THREE.SphereGeometry( pendulum1Mass / 2, 16, 16 ),
+            new THREE.MeshPhongMaterial( {
+                color: pendulum1Color,
+            } ),
         );
-        let sphereMaterial = new THREE.MeshNormalMaterial();
+        pendulum2 = new THREE.Mesh(
+            new THREE.SphereGeometry( pendulum2Mass / 2, 16, 16 ),
+            new THREE.MeshPhongMaterial( {
+                color: pendulum2Color,
+            } ),
+        );
 
-        p1 = new THREE.Mesh( sphereGeometry, sphereMaterial );
-        p2 = new THREE.Mesh( sphereGeometry, sphereMaterial );
-
-        trail = new THREE.Line( new THREE.Geometry, new THREE.LineBasicMaterial );
+        trail = new THREE.Line( new THREE.Geometry, new THREE.LineBasicMaterial( {
+            color: new THREE.Color( `hsl( ${trailColor}, 100%, 50% )` ),
+        } ) );
 
         let armsGeometry = new THREE.Geometry();
         armsGeometry.vertices.push( new THREE.Vector3() );
-        armsGeometry.vertices.push( new THREE.Vector3().copy( pp1.position ) );
-        armsGeometry.vertices.push( new THREE.Vector3().copy( pp2.position ) );
-        arms = new THREE.Line( armsGeometry, new THREE.LineBasicMaterial );
+        armsGeometry.vertices.push( new THREE.Vector3().copy( pendulum1Physics.position ) );
+        armsGeometry.vertices.push( new THREE.Vector3().copy( pendulum2Physics.position ) );
+        let armsMaterial = new THREE.LineBasicMaterial( {
+            color: armsColor,
+        } );
+        arms = new THREE.Line( armsGeometry, armsMaterial );
 
-        vah1 = new THREE.ArrowHelper(
-            new THREE.Vector3().copy( pp1.velocity ), // arrow direction
-            new THREE.Vector3().copy( pp1.position ), // arrow origin
-            pp1.velocity.length, // arrow length
+        pendulum1VelocityArrowHelper = new THREE.ArrowHelper(
+            new THREE.Vector3().copy( pendulum1Physics.velocity ), // arrow direction
+            new THREE.Vector3().copy( pendulum1Physics.position ), // arrow origin
+            pendulum1Physics.velocity.length, // arrow length
             0x567def, // lightblue color
         );
 
-        vah2 = new THREE.ArrowHelper(
-            new THREE.Vector3().copy( pp2.velocity ), // arrow direction
-            new THREE.Vector3().copy( pp2.position ), // arrow origin
-            pp2.velocity.length, // arrow length
+        pendulum2VelocityArrowHelper = new THREE.ArrowHelper(
+            new THREE.Vector3().copy( pendulum2Physics.velocity ), // arrow direction
+            new THREE.Vector3().copy( pendulum2Physics.position ), // arrow origin
+            pendulum2Physics.velocity.length, // arrow length
             0x567def, // lightblue color
         );
 
-        scene.add( p1 );
-        scene.add( p2 );
+        scene.add( pendulum1 );
+        scene.add( pendulum2 );
         scene.add( trail );
         scene.add( arms );
-        scene.add( vah1 );
-        scene.add( vah2 );
+        scene.add( pendulum1VelocityArrowHelper );
+        scene.add( pendulum2VelocityArrowHelper );
 
         if ( DEBUG ) {
             let ah = new THREE.AxesHelper( 20 );
@@ -127,68 +165,192 @@ $( function () {
         }
         if ( CONTROLS ) {
             controls = new THREE.OrbitControls( camera, renderer.domElement );
+            controls.enableDamping = true;
+            controls.enableKeys = false;
+            controls.enablePan = false;
         }
     }
 
+    function initGUI() {
+
+        gui = new dat.GUI;
+
+        let settings = {
+            pendulum1Mass: pendulum1Mass,
+            pendulum2Mass: pendulum2Mass,
+            pendulum1Color: pendulum1Color,
+            pendulum2Color: pendulum2Color,
+            arm1Length: distanceConstraint1.distance,
+            arm2Length: distanceConstraint2.distance,
+            armsColor: armsColor,
+            backgroundColor: backgroundColor,
+            trailLength: trailLength,
+            trailDash: trailDash,
+            trailGap: trailGap,
+            cameraFollowMovement: cameraFollowMovement,
+        };
+
+        let pendulum1MassController = gui.add( settings, 'pendulum1Mass', .01, 10 );
+        pendulum1MassController.onFinishChange( value => {
+            pendulum1Physics.mass = value;
+            pendulum1.scale( value / 2, value / 2, value / 2 );
+        } );
+
+        let pendulum2MassController = gui.add( settings, 'pendulum2Mass', .01, 10 );
+        pendulum2MassController.onFinishChange( value => {
+            pendulum2Physics.mass = value;
+            pendulum2.scale( value / 2, value / 2, value / 2 );
+        } );
+
+        let pendulum1ColorController = gui.addColor( settings, 'pendulum1Color' );
+        pendulum1ColorController.onChange( value => {
+            pendulum1.material.color = new THREE.Color( value );
+        } );
+
+        let pendulum2ColorController = gui.addColor( settings, 'pendulum2Color' );
+        pendulum2ColorController.onChange( value => {
+            pendulum2.material.color = new THREE.Color( value );
+        } );
+
+        let arm1LengthController = gui.add( settings, 'arm1Length', 1, 10 );
+        arm1LengthController.onChange( value => {
+            distanceConstraint1.distance = value;
+        } );
+
+        let arm2LengthController = gui.add( settings, 'arm2Length', 1, 30 );
+        arm2LengthController.onChange( value => {
+            distanceConstraint2.distance = value;
+        } );
+
+        let armsColorController = gui.addColor( settings, 'armsColor' );
+        armsColorController.onChange( value => {
+            arms.material.color = new THREE.Color( value );
+        } );
+
+        let backgroundColorController = gui.addColor( settings, 'backgroundColor' );
+        backgroundColorController.onChange( value => {
+            scene.background = new THREE.Color( value );
+        } );
+
+        let trailLengthController = gui.add( settings, 'trailLength', 0, 500 ).step( 10 );
+        trailLengthController.onChange( value => {
+            trailLength = value;
+        } );
+
+        let trailDashController = gui.add( settings, 'trailDash', 0, 10 );
+        trailDashController.onChange( value => {
+            trail.material.dashSize = value;
+        } );
+        let trailGapController = gui.add( settings, 'trailGap', 0, 10 );
+        trailGapController.onChange( value => {
+            trail.material.gapSize = value;
+        } );
+
+        gui.add( settings, 'cameraFollowMovement' );
+    }
+
+    function initStats() {
+
+        stats = new Stats();
+
+        document.body.appendChild( stats.dom );
+    }
+
     function draw() {
+
         window.requestAnimationFrame( draw );
         world.step( dt );
 
-        p1.position.copy( pp1.position );
-        p2.position.copy( pp2.position );
+        pendulum1.position.copy( pendulum1Physics.position );
+        pendulum2.position.copy( pendulum2Physics.position );
+
+        cameraFollowMovement
+            ? camera.lookAt( pendulum2.position )
+            : camera.lookAt( scene.position );
 
         updateArms();
         updateTrail();
-        updateArrows();
+        if ( ARROWS ) updateArrows();
 
-        if ( pp1.velocity.length === 0 && pp2.velocity.length === 0 ) {
+        if ( pendulum1Physics.velocity.length === 0 && pendulum2Physics.velocity.length === 0 ) {
             reset();
         }
 
         renderer.render( scene, camera );
+
+        stats.update();
     }
 
     function updateArms() {
-        // first vertex stays static at the pendulum base
-        arms.geometry.vertices[ 1 ].copy( pp1.position ); // change the endpoint of the [base -> pendulum A] arm
-        arms.geometry.vertices[ 2 ].copy( pp2.position ); // change the endpoint of the [A -> B] arm
+        arms.geometry.vertices[ 1 ].copy( pendulum1Physics.position );
+        arms.geometry.vertices[ 2 ].copy( pendulum2Physics.position );
         arms.geometry.verticesNeedUpdate = true;
     }
 
     function updateTrail() {
-        trail.geometry.vertices.push( new THREE.Vector3().copy( pp2.position ) );
+        //update trail color
+        if ( trailColor > 359 ) {
+            trailColor = 0;
+        } else {
+            trailColor++;
+        }
 
-        if ( trail.geometry.vertices.length > 5000 ) {
-            trail.geometry.vertices.shift(
-                trail.geometry.vertices.length - 5000
+        // add the last pendulum position vertex
+        trail.geometry.vertices.push( new THREE.Vector3().copy( pendulum2Physics.position ) );
+        trail.geometry.colors.push( new THREE.Color( `hsl( ${trailColor}, 100%, 50% )` ) );
+
+        if ( trail.geometry.vertices.length > trailLength ) {
+
+            trail.geometry.vertices.splice(
+                0,
+                trail.geometry.vertices.length - trailLength
+            );
+
+            trail.geometry.colors.splice(
+                0,
+                trail.geometry.colors.length - trailLength
             );
         }
-        trail.geometry.verticesNeedUpdate = true;
+        // recreate the trail object
+        scene.remove( trail );
+
+        let geometry = trail.geometry.clone();
+        let material = new THREE.LineDashedMaterial( {
+            dashSize: 3,
+            gapSize: 1,
+            vertexColors: THREE.VertexColors,
+        } );
+
+        trail = new THREE.Line( geometry, material );
+        trail.computeLineDistances();
+        trail.name = 'trail';
+
+        scene.add( trail );
     }
 
     function updateArrows() {
-        scene.remove( vah1 );
-        vah1 = new THREE.ArrowHelper(
-            new THREE.Vector3().copy( pp1.velocity ), // arrow direction
-            new THREE.Vector3().copy( pp1.position ), // arrow origin
-            pp1.velocity.length * 10, // arrow length
+        scene.remove( pendulum1VelocityArrowHelper );
+        pendulum1VelocityArrowHelper = new THREE.ArrowHelper(
+            new THREE.Vector3().copy( pendulum1Physics.velocity ), // arrow direction
+            new THREE.Vector3().copy( pendulum1Physics.position ), // arrow origin
+            pendulum1Physics.velocity.length * 10, // arrow length
             0x567def, // lightblue color
         );
-        scene.add( vah1 );
+        scene.add( pendulum1VelocityArrowHelper );
 
-        scene.remove( vah2 );
-        vah2 = new THREE.ArrowHelper(
-            new THREE.Vector3().copy( pp2.velocity ), // arrow direction
-            new THREE.Vector3().copy( pp2.position ), // arrow origin
-            pp2.velocity.length * 10, // arrow length
+        scene.remove( pendulum2VelocityArrowHelper );
+        pendulum2VelocityArrowHelper = new THREE.ArrowHelper(
+            new THREE.Vector3().copy( pendulum2Physics.velocity ), // arrow direction
+            new THREE.Vector3().copy( pendulum2Physics.position ), // arrow origin
+            pendulum2Physics.velocity.length * 10, // arrow length
             0x567def, // lightblue color
         );
-        scene.add( vah2 );
+        scene.add( pendulum2VelocityArrowHelper );
     }
 
     function reset() {
-        pp1.position.set( -10, 0, 0 );
-        pp2.position.set( -10, 0, -10 );
+        pendulum1Physics.position.set( -10, 0, 0 );
+        pendulum2Physics.position.set( -10, 0, -10 );
 
         trail.geometry.vertices.length = 0;
 
@@ -200,12 +362,13 @@ $( function () {
     // run
     initCannon();
     initThree();
+    initGUI();
+    initStats();
     window.requestAnimationFrame( draw );
 
     window.scene = scene;
-    window.world = world;
     window.camera = camera;
-    window.vah1 = vah1;
-    window.vah2 = vah2;
+    window.vah1 = pendulum1VelocityArrowHelper;
+    window.vah2 = pendulum2VelocityArrowHelper;
     window.trail = trail;
 } );
