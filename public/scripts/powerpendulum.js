@@ -176,8 +176,8 @@ $( function () {
             controls.autoRotateSpeed = -1; // default: 2 => 30s rotation
             controls.enableDamping = true;
             // controls.dampingFactor = .5;
-            controls.enableKeys = false;
-            controls.enablePan = false;
+            controls.enableKeys = true;
+            controls.enablePan = true;
             controls.rotateSpeed = .25;
             controls.minDistance = 50;
         }
